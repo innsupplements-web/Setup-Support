@@ -1,8 +1,5 @@
-export default function Page() {
-  return (
-    <main style={{ padding: 24 }}>
-      <h1>Kundendienst ist da ✅</h1>
-      <p>Wenn du das siehst, ist die Route aktiv.</p>
-    </main>
-  );
+import { redirect } from "next/navigation";
+
+export default function Home() {
+  redirect("/kundendienst");
 }
