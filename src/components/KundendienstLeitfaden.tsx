@@ -1,9 +1,8 @@
 "use client";
 
 import React, { useEffect, useMemo, useState } from "react";
-import { CheckCircle, ChevronLeft, ChevronRight, ClipboardList, Download, RefreshCw } from "lucide-react";
 
-/** ===== Typen ===== */
+/** ===== Typen (ohne BC) ===== */
 type YesNo = "ja" | "nein" | undefined;
 
 interface LeitfadenState {
@@ -33,6 +32,7 @@ interface LeitfadenState {
   followUp: { noetig: boolean; grund?: string; notizen?: string };
 }
 
+/** ===== Initialzustand ===== */
 const EMPTY_STATE: LeitfadenState = {
   sessionId:
     typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -42,14 +42,20 @@ const EMPTY_STATE: LeitfadenState = {
   mitarbeiterin: "",
   kunde: { name: "", kundennummer: "", telefon: "" },
   solar: { vorhanden: undefined, groesseBekannt: undefined, groesseM2: null, groesseRange: undefined },
-  angebotKombiWartung: { kommuniziert: false, interesse: undefined, preisModus: undefined, preisEUR: null, preisstufe: undefined },
+  angebotKombiWartung: {
+    kommuniziert: false,
+    interesse: undefined,
+    preisModus: undefined,
+    preisEUR: null,
+    preisstufe: undefined,
+  },
   pv: { vorhanden: undefined, batterie: undefined, heizstabUeberschuss: undefined, upgradeInteresse: undefined },
   followUp: { noetig: false, grund: "", notizen: "" },
 };
 
 const LS_KEY = "leitfaden-bestandskunde-v1";
 
-/** ===== Helpers (SSR-safe) ===== */
+/** ===== Helpers (SSR-sicher) ===== */
 function saveToLocalStorage(data: LeitfadenState) {
   try {
     if (typeof window !== "undefined") {
@@ -71,11 +77,13 @@ function downloadJSON(filename: string, data: unknown) {
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
-  a.href = url; a.download = filename;
-  document.body.appendChild(a); a.click(); a.remove();
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
   URL.revokeObjectURL(url);
 }
-/*
 async function copyToClipboard(text: string) {
   try {
     if (typeof navigator === "undefined" || !navigator.clipboard) return false;
@@ -86,50 +94,19 @@ async function copyToClipboard(text: string) {
   }
 }
 
-/** ===== (später) Business Central DTO ===== */
-interface BusinessCentralLeadDTO {
-  SessionId: string; Timestamp: string; Agent: string;
-  CustomerName?: string; CustomerNo?: string; Phone?: string;
-  SolarPresent: boolean | null; SolarSizeKnown: boolean | null; SolarSizeM2?: number | null; SolarSizeRange?: string | null;
-  ComboServiceOffered: boolean; ComboServiceInterested: boolean | null; ComboPriceMode?: string | null; ComboPriceEUR?: number | null; ComboPriceTier?: string | null;
-  PVPresent: boolean | null; PVBattery: boolean | null; PVHeatRod: boolean | null; PVUpgradeInterest: boolean | null;
-  FollowUpNeeded: boolean; FollowUpReason?: string; Notes?: string;
-}
-/*
-function mapToBusinessCentral(s: LeitfadenState): BusinessCentralLeadDTO {
-  return {
-    SessionId: s.sessionId,
-    Timestamp: s.timestampISO,
-    Agent: s.mitarbeiterin || "",
-    CustomerName: s.kunde.name || "",
-    CustomerNo: s.kunde.kundennummer || "",
-    Phone: s.kunde.telefon || "",
-    SolarPresent: s.solar.vorhanden === undefined ? null : s.solar.vorhanden === "ja",
-    SolarSizeKnown: s.solar.groesseBekannt === undefined ? null : s.solar.groesseBekannt === "ja",
-    SolarSizeM2: s.solar.groesseM2 ?? null,
-    SolarSizeRange: s.solar.groesseRange ?? null,
-    ComboServiceOffered: s.angebotKombiWartung.kommuniziert,
-    ComboServiceInterested: s.angebotKombiWartung.interesse === undefined ? null : s.angebotKombiWartung.interesse === "ja",
-    ComboPriceMode: s.angebotKombiWartung.preisModus ?? null,
-    ComboPriceEUR: s.angebotKombiWartung.preisEUR ?? null,
-    ComboPriceTier: s.angebotKombiWartung.preisstufe ?? null,
-    PVPresent: s.pv.vorhanden === undefined ? null : s.pv.vorhanden === "ja",
-    PVBattery: s.pv.batterie === undefined ? null : s.pv.batterie === "ja",
-    PVHeatRod: s.pv.heizstabUeberschuss === undefined ? null : s.pv.heizstabUeberschuss === "ja",
-    PVUpgradeInterest: s.pv.upgradeInteresse === undefined ? null : s.pv.upgradeInteresse === "ja",
-    FollowUpNeeded: s.followUp.noetig,
-    FollowUpReason: s.followUp.grund || "",
-    Notes: s.followUp.notizen || "",
-  };
-}
-
-/** ===== UI-Teile (ohne shadcn, nur Tailwind) ===== */
+/** ===== Kleine UI-Helfer (pure Tailwind) ===== */
 function YesNo({
-  name, value, onChange,
-}: { name: string; value: YesNo; onChange: (v: YesNo) => void }) {
+  name,
+  value,
+  onChange,
+}: {
+  name: string;
+  value: YesNo;
+  onChange: (v: YesNo) => void;
+}) {
   return (
     <div className="flex gap-6">
-      <label className="inline-flex items-center gap-2 cursor-pointer">
+      <label className="inline-flex items-center gap-2 cursor-pointer select-none">
         <input
           type="radio"
           name={name}
@@ -140,7 +117,7 @@ function YesNo({
         />
         <span>Ja</span>
       </label>
-      <label className="inline-flex items-center gap-2 cursor-pointer">
+      <label className="inline-flex items-center gap-2 cursor-pointer select-none">
         <input
           type="radio"
           name={name}
@@ -185,11 +162,14 @@ function SummaryRow({ label, children }: { label: string; children: React.ReactN
   );
 }
 
-/** ===== Steps ===== */
+/** ===== Steps definieren ===== */
 type Step = {
   id: string;
   title: string;
-  render: (ctx: { state: LeitfadenState; setState: React.Dispatch<React.SetStateAction<LeitfadenState>> }) => React.ReactNode;
+  render: (ctx: {
+    state: LeitfadenState;
+    setState: React.Dispatch<React.SetStateAction<LeitfadenState>>;
+  }) => React.ReactNode;
 };
 
 function buildSteps(state: LeitfadenState): Step[] {
@@ -212,7 +192,7 @@ function buildSteps(state: LeitfadenState): Step[] {
     ),
   });
 
-  // 1a) Größe (nur wenn Solar = ja)
+  // 1a) Größe (nur bei Ja)
   if (state.solar.vorhanden === "ja") {
     steps.push({
       id: "solar-groesse",
@@ -251,11 +231,16 @@ function buildSteps(state: LeitfadenState): Step[] {
                 <select
                   value={state.solar.groesseRange ?? ""}
                   onChange={(e) =>
-                    setState((s) => ({ ...s, solar: { ...s.solar, groesseRange: (e.target.value || undefined) as any } }))
+                    setState((s) => ({
+                      ...s,
+                      solar: { ...s.solar, groesseRange: ((e.target.value || undefined) as any) },
+                    }))
                   }
                   className="w-full rounded-lg border border-gray-300 px-3 py-2"
                 >
-                  <option value="" disabled>Bitte wählen</option>
+                  <option value="" disabled>
+                    Bitte wählen
+                  </option>
                   <option value="<20">Kleiner als 20 m²</option>
                   <option value="20-40">20–40 m²</option>
                   <option value="40-60">40–60 m²</option>
@@ -276,14 +261,17 @@ function buildSteps(state: LeitfadenState): Step[] {
     render: ({ state, setState }) => (
       <Section title="Kombi-Wartung: Solar + Heizkessel">
         <p className="text-sm text-gray-600 mb-2">
-          Wir bieten eine <b>Solar-Wartung</b> in Kombination mit der <b>Heizkessel-Wartung</b> zum Kombipreis an – das bringt einen klaren Vorteil.
+          Wir bieten eine <b>Solar-Wartung</b> in Kombination mit der <b>Heizkessel-Wartung</b> zum Kombipreis an – das bringt
+          einen klaren Vorteil.
         </p>
 
         <FieldRow label="Interesse am Kombi-Angebot?">
           <YesNo
             name="kombi-interesse"
             value={state.angebotKombiWartung.interesse}
-            onChange={(v) => setState((s) => ({ ...s, angebotKombiWartung: { ...s.angebotKombiWartung, interesse: v } }))}
+            onChange={(v) =>
+              setState((s) => ({ ...s, angebotKombiWartung: { ...s.angebotKombiWartung, interesse: v } }))
+            }
           />
         </FieldRow>
 
@@ -294,11 +282,19 @@ function buildSteps(state: LeitfadenState): Step[] {
               <select
                 value={state.angebotKombiWartung.preisModus ?? ""}
                 onChange={(e) =>
-                  setState((s) => ({ ...s, angebotKombiWartung: { ...s.angebotKombiWartung, preisModus: (e.target.value || undefined) as any } }))
+                  setState((s) => ({
+                    ...s,
+                    angebotKombiWartung: {
+                      ...s.angebotKombiWartung,
+                      preisModus: ((e.target.value || undefined) as any),
+                    },
+                  }))
                 }
                 className="w-full rounded-lg border border-gray-300 px-3 py-2"
               >
-                <option value="" disabled>Bitte wählen</option>
+                <option value="" disabled>
+                  Bitte wählen
+                </option>
                 <option value="fest">Fester Preis (EUR)</option>
                 <option value="auswahl">Preis-Stufe</option>
               </select>
@@ -316,7 +312,10 @@ function buildSteps(state: LeitfadenState): Step[] {
                   onChange={(e) =>
                     setState((s) => ({
                       ...s,
-                      angebotKombiWartung: { ...s.angebotKombiWartung, preisEUR: e.target.value === "" ? null : Number(e.target.value) },
+                      angebotKombiWartung: {
+                        ...s.angebotKombiWartung,
+                        preisEUR: e.target.value === "" ? null : Number(e.target.value),
+                      },
                     }))
                   }
                   className="w-full rounded-lg border border-gray-300 px-3 py-2"
@@ -330,11 +329,19 @@ function buildSteps(state: LeitfadenState): Step[] {
                 <select
                   value={state.angebotKombiWartung.preisstufe ?? ""}
                   onChange={(e) =>
-                    setState((s) => ({ ...s, angebotKombiWartung: { ...s.angebotKombiWartung, preisstufe: (e.target.value || undefined) as any } }))
+                    setState((s) => ({
+                      ...s,
+                      angebotKombiWartung: {
+                        ...s.angebotKombiWartung,
+                        preisstufe: ((e.target.value || undefined) as any),
+                      },
+                    }))
                   }
                   className="w-full rounded-lg border border-gray-300 px-3 py-2"
                 >
-                  <option value="" disabled>Bitte wählen</option>
+                  <option value="" disabled>
+                    Bitte wählen
+                  </option>
                   <option value="Basis">Basis</option>
                   <option value="Plus">Plus</option>
                   <option value="Premium">Premium</option>
@@ -364,7 +371,7 @@ function buildSteps(state: LeitfadenState): Step[] {
     ),
   });
 
-  // 3a) PV-Details
+  // 3a) PV-Details (nur bei Ja)
   if (state.pv.vorhanden === "ja") {
     steps.push({
       id: "pv-details",
@@ -387,7 +394,10 @@ function buildSteps(state: LeitfadenState): Step[] {
           </FieldRow>
 
           {(state.pv.batterie === "nein" || state.pv.heizstabUeberschuss === "nein") && (
-            <FieldRow label="Interesse an Nachrüstung/Optimierung?" hint="Bei Interesse: Rückruf durch Beratungsteam veranlassen.">
+            <FieldRow
+              label="Interesse an Nachrüstung/Optimierung?"
+              hint="Bei Interesse: Rückruf durch Beratungsteam veranlassen."
+            >
               <YesNo
                 name="pv-upgrade"
                 value={state.pv.upgradeInteresse}
@@ -520,8 +530,7 @@ function buildSteps(state: LeitfadenState): Step[] {
         </div>
 
         <div className="mt-6 inline-flex items-center gap-2 rounded-xl bg-green-50 p-3 text-green-800">
-          <CheckCircle className="h-5 w-5" />
-          <span className="text-sm">Daten sind bereit für Export / spätere Übergabe an Business Central.</span>
+          <span className="text-sm">Daten sind bereit für Export.</span>
         </div>
       </Section>
     ),
@@ -555,18 +564,20 @@ export default function KundendienstLeitfaden() {
     setState(fresh);
     setStepIndex(0);
   }
-  function next() { setStepIndex((i) => Math.min(i + 1, steps.length - 1)); }
-  function prev() { setStepIndex((i) => Math.max(i - 1, 0)); }
+  function next() {
+    setStepIndex((i) => Math.min(i + 1, steps.length - 1));
+  }
+  function prev() {
+    setStepIndex((i) => Math.max(i - 1, 0));
+  }
 
   async function handleCopyJSON() {
-    const dto = mapToBusinessCentral(state);
-    const ok = await copyToClipboard(JSON.stringify(dto, null, 2));
+    const ok = await copyToClipboard(JSON.stringify(state, null, 2));
     setCopied(ok);
     setTimeout(() => setCopied(false), 1500);
   }
   function handleDownloadJSON() {
-    const dto = mapToBusinessCentral(state);
-    downloadJSON(`leitfaden_${state.sessionId}.json`, dto);
+    downloadJSON(`leitfaden_${state.sessionId}.json`, state);
   }
 
   return (
@@ -576,9 +587,11 @@ export default function KundendienstLeitfaden() {
         <div className="border-b px-5 py-4 flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-semibold">Leitfaden Kundendienst – Bestandskunde</h1>
-            <p className="text-xs text-gray-500">Geführter Klickablauf mit Datenerfassung (Speicherung lokal, Export als JSON).</p>
+            <p className="text-xs text-gray-500">
+              Geführter Klickablauf mit Datenerfassung (Speicherung lokal, Export/Copy als JSON).
+            </p>
           </div>
-          <span className="text-xs rounded-lg bg-gray-100 px-2 py-1">Session: {state.sessionId.slice(0,8)}</span>
+          <span className="text-xs rounded-lg bg-gray-100 px-2 py-1">Session: {state.sessionId.slice(0, 8)}</span>
         </div>
 
         <div className="p-5">
@@ -612,19 +625,15 @@ export default function KundendienstLeitfaden() {
                 />
               </div>
               <div>
-               <label className="block text-sm font-medium mb-1">Kundennummer</label>
-<input
-  className="w-full rounded-lg border border-gray-300 px-3 py-2"
-  placeholder="z. B. 4711"
-  value={state.kunde.kundennummer || ""}
-  onChange={(e) =>
-    setState((s) => ({
-      ...s,
-      kunde: { ...s.kunde, kundennummer: e.target.value },
-    }))
-  }
-/>
-
+                <label className="block text-sm font-medium mb-1">Kundennummer</label>
+                <input
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                  placeholder="z. B. 4711"
+                  value={state.kunde.kundennummer || ""}
+                  onChange={(e) =>
+                    setState((s) => ({ ...s, kunde: { ...s.kunde, kundennummer: e.target.value } }))
+                  }
+                />
               </div>
             </div>
 
@@ -642,7 +651,12 @@ export default function KundendienstLeitfaden() {
                 <input
                   type="checkbox"
                   checked={state.angebotKombiWartung.kommuniziert}
-                  onChange={(e) => setState((s) => ({ ...s, angebotKombiWartung: { ...s.angebotKombiWartung, kommuniziert: e.target.checked } }))}
+                  onChange={(e) =>
+                    setState((s) => ({
+                      ...s,
+                      angebotKombiWartung: { ...s.angebotKombiWartung, kommuniziert: e.target.checked },
+                    }))
+                  }
                 />
                 <span className="text-sm">Angebot Kombi-Wartung erwähnt</span>
               </label>
@@ -650,25 +664,23 @@ export default function KundendienstLeitfaden() {
           </div>
 
           {/* Step-Inhalt */}
-          <div key={stepIndex}>
-            {steps[stepIndex]?.render({ state, setState })}
-          </div>
+          <div key={stepIndex}>{steps[stepIndex]?.render({ state, setState })}</div>
 
-           {/* 
+          {/* Step Buttons */}
           <div className="mt-6 flex justify-between">
             <button
               onClick={prev}
               disabled={stepIndex === 0}
               className="inline-flex items-center gap-2 rounded-lg border px-4 py-2 disabled:opacity-50"
             >
-              <ChevronLeft className="h-4 w-4" /> Zurück
+              Zurück
             </button>
             {stepIndex < steps.length - 1 ? (
               <button
                 onClick={next}
                 className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-white"
               >
-                Weiter <ChevronRight className="h-4 w-4" />
+                Weiter
               </button>
             ) : (
               <button disabled className="inline-flex items-center gap-2 rounded-lg bg-gray-300 px-4 py-2 text-white">
@@ -681,22 +693,20 @@ export default function KundendienstLeitfaden() {
           <div className="my-6 h-px bg-gray-200" />
           <div className="flex flex-wrap items-center gap-3">
             <button
-              onClick={async () => { await handleCopyJSON(); }}
-              className="inline-flex items-center gap-2 rounded-lg border px-4 py-2"
+              onClick={async () => {
+                await handleCopyJSON();
+              }}
+              className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 ${
+                copied ? "bg-green-50 border-green-300 text-green-800" : ""
+              }`}
             >
-              <ClipboardList className="h-4 w-4" /> {copied ? "Kopiert!" : "JSON in Zwischenablage"}
+              {copied ? "Kopiert!" : "JSON in Zwischenablage"}
             </button>
-            <button
-              onClick={handleDownloadJSON}
-              className="inline-flex items-center gap-2 rounded-lg border px-4 py-2"
-            >
-              <Download className="h-4 w-4" /> JSON herunterladen
+            <button onClick={handleDownloadJSON} className="inline-flex items-center gap-2 rounded-lg border px-4 py-2">
+              JSON herunterladen
             </button>
-            <button
-              onClick={resetSession}
-              className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-gray-700 hover:bg-gray-100"
-            >
-              <RefreshCw className="h-4 w-4" /> Neue Session
+            <button onClick={resetSession} className="inline-flex items-center gap-2 rounded-lg px-4 py-2 hover:bg-gray-100">
+              Neue Session
             </button>
           </div>
 
@@ -717,4 +727,3 @@ export default function KundendienstLeitfaden() {
     </div>
   );
 }
-
