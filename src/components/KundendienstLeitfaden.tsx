@@ -100,7 +100,7 @@ function mapToBusinessCentral(s: LeitfadenState): BusinessCentralLeadDTO {
     Timestamp: s.timestampISO,
     Agent: s.mitarbeiterin || "",
     CustomerName: s.kunde.name || "",
-    CustomerNo: s.kundennummer || s.kunde.kundennummer || "",
+    CustomerNo: s.kunde.kundennummer || "",
     Phone: s.kunde.telefon || "",
     SolarPresent: s.solar.vorhanden === undefined ? null : s.solar.vorhanden === "ja",
     SolarSizeKnown: s.solar.groesseBekannt === undefined ? null : s.solar.groesseBekannt === "ja",
