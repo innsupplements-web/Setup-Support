@@ -75,6 +75,7 @@ function downloadJSON(filename: string, data: unknown) {
   document.body.appendChild(a); a.click(); a.remove();
   URL.revokeObjectURL(url);
 }
+/*
 async function copyToClipboard(text: string) {
   try {
     if (typeof navigator === "undefined" || !navigator.clipboard) return false;
