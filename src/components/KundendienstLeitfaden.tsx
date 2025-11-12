@@ -610,13 +610,19 @@ export default function KundendienstLeitfaden() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium mb-1">Kundennummer</label>
-                <input
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2"
-                  placeholder="z. B. 4711"
-                  value={state.kundennummer}
-                  onChange={(e) => setState((s) => ({ ...s, kundennummer: e.target.value }))}
-                />
+               <label className="block text-sm font-medium mb-1">Kundennummer</label>
+<input
+  className="w-full rounded-lg border border-gray-300 px-3 py-2"
+  placeholder="z. B. 4711"
+  value={state.kunde.kundennummer || ""}
+  onChange={(e) =>
+    setState((s) => ({
+      ...s,
+      kunde: { ...s.kunde, kundennummer: e.target.value },
+    }))
+  }
+/>
+
               </div>
             </div>
 
