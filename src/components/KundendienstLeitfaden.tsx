@@ -94,6 +94,7 @@ interface BusinessCentralLeadDTO {
   PVPresent: boolean | null; PVBattery: boolean | null; PVHeatRod: boolean | null; PVUpgradeInterest: boolean | null;
   FollowUpNeeded: boolean; FollowUpReason?: string; Notes?: string;
 }
+/*
 function mapToBusinessCentral(s: LeitfadenState): BusinessCentralLeadDTO {
   return {
     SessionId: s.sessionId,
@@ -652,7 +653,7 @@ export default function KundendienstLeitfaden() {
             {steps[stepIndex]?.render({ state, setState })}
           </div>
 
-          {/* Step Buttons */}
+           {/* 
           <div className="mt-6 flex justify-between">
             <button
               onClick={prev}
