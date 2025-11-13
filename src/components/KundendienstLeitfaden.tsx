@@ -2,37 +2,62 @@
 
 import React, { useEffect, useMemo, useState } from "react";
 
-/** ===== Typen (ohne BC) ===== */
+/** ===== Typen ===== */
 type YesNo = "ja" | "nein" | undefined;
+type HeizkesselTyp = "Easyfire2" | "MF2/PFP";
+type HeizZone = "1" | "2";
 
 interface LeitfadenState {
   sessionId: string;
   timestampISO: string;
   mitarbeiterin: string;
-  kunde: { name?: string; kundennummer?: string; telefon?: string };
+  serviceartikel: string; // interne Nummer oder Text
+
   solar: {
     vorhanden: YesNo;
-    groesseBekannt: YesNo;
-    groesseM2?: number | null;
-    groesseRange?: "<20" | "20-40" | "40-60" | ">60" | undefined;
   };
-  angebotKombiWartung: {
-    kommuniziert: boolean;
-    interesse: YesNo;
-    preisModus?: "fest" | "auswahl" | undefined;
-    preisEUR?: number | null;
-    preisstufe?: "Basis" | "Plus" | "Premium" | undefined;
+
+  heizkessel: {
+    typ?: HeizkesselTyp;
+    zone?: HeizZone;
+    wartungsvertrag: YesNo;
   };
-  pv: {
-    vorhanden: YesNo;
-    batterie: YesNo;
-    heizstabUeberschuss: YesNo;
-    upgradeInteresse: YesNo;
+
+  angebot: {
+    variante?: "nur-heizkessel" | "nur-solar" | "kombi" | undefined;
   };
+
   followUp: { noetig: boolean; grund?: string; notizen?: string };
 }
 
+/** ===== Preis-Tabelle (netto) ===== */
+
+const SOLAR_EINZELPREIS = 330; // immer
+const SOLAR_KOMBIANTEIL = 169; // zusätzlicher Anteil im Kombi-Paket
+
+const HEIZKessel_PREISE: Record<
+  HeizkesselTyp,
+  Record<
+    HeizZone,
+    {
+      mitVertrag: number;
+      ohneVertrag: number;
+    }
+  >
+> = {
+  Easyfire2: {
+    "1": { mitVertrag: 316.8, ohneVertrag: 416.4 },
+    "2": { mitVertrag: 363.6, ohneVertrag: 464.4 },
+  },
+  "MF2/PFP": {
+    "1": { mitVertrag: 471.6, ohneVertrag: 558 },
+    // Zahlen wie von dir angegeben: Zone 2 mit 589,20 – ohne 486,00
+    "2": { mitVertrag: 589.2, ohneVertrag: 486 },
+  },
+};
+
 /** ===== Initialzustand ===== */
+
 const EMPTY_STATE: LeitfadenState = {
   sessionId:
     typeof crypto !== "undefined" && "randomUUID" in crypto
@@ -40,22 +65,17 @@ const EMPTY_STATE: LeitfadenState = {
       : Math.random().toString(36).slice(2),
   timestampISO: new Date().toISOString(),
   mitarbeiterin: "",
-  kunde: { name: "", kundennummer: "", telefon: "" },
-  solar: { vorhanden: undefined, groesseBekannt: undefined, groesseM2: null, groesseRange: undefined },
-  angebotKombiWartung: {
-    kommuniziert: false,
-    interesse: undefined,
-    preisModus: undefined,
-    preisEUR: null,
-    preisstufe: undefined,
-  },
-  pv: { vorhanden: undefined, batterie: undefined, heizstabUeberschuss: undefined, upgradeInteresse: undefined },
+  serviceartikel: "",
+  solar: { vorhanden: undefined },
+  heizkessel: { wartungsvertrag: undefined },
+  angebot: { variante: undefined },
   followUp: { noetig: false, grund: "", notizen: "" },
 };
 
-const LS_KEY = "leitfaden-bestandskunde-v1";
+const LS_KEY = "leitfaden-bestandskunde-v2";
 
 /** ===== Helpers (SSR-sicher) ===== */
+
 function saveToLocalStorage(data: LeitfadenState) {
   try {
     if (typeof window !== "undefined") {
@@ -74,30 +94,8 @@ function loadFromLocalStorage(): LeitfadenState | null {
   }
 }
 
-function downloadJSON(filename: string, data: unknown) {
-  if (typeof window === "undefined") return;
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = filename;
-  document.body.appendChild(a);
-  a.click();
-  a.remove();
-  URL.revokeObjectURL(url);
-}
-
-async function copyToClipboard(text: string) {
-  try {
-    if (typeof navigator === "undefined" || !navigator.clipboard) return false;
-    await navigator.clipboard.writeText(text);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 /** ===== CSV-Helper ===== */
+
 function escapeCsvValue(value: unknown): string {
   if (value === null || value === undefined) return "";
   const str = String(value);
@@ -107,27 +105,54 @@ function escapeCsvValue(value: unknown): string {
   return str;
 }
 
+/** Preise aus State berechnen */
+function calcPrices(state: LeitfadenState) {
+  const { heizkessel } = state;
+  const typ = heizkessel.typ;
+  const zone = heizkessel.zone;
+  const vw = heizkessel.wartungsvertrag;
+
+  let heizpreis: number | null = null;
+
+  if (typ && zone && vw) {
+    const t = HEIZKessel_PREISE[typ][zone];
+    heizpreis = vw === "ja" ? t.mitVertrag : t.ohneVertrag;
+  }
+
+  const solarEinzel = SOLAR_EINZELPREIS;
+  const solarKombi = SOLAR_KOMBIANTEIL;
+
+  const kombiGesamt = heizpreis !== null ? heizpreis + solarKombi : null;
+  const ersparnisKombi =
+    heizpreis !== null ? solarEinzel - solarKombi : null; // Einsparung nur beim Solar-Anteil
+
+  return {
+    heizpreis,
+    solarEinzel,
+    solarKombi,
+    kombiGesamt,
+    ersparnisKombi,
+  };
+}
+
 function buildCsvFromState(state: LeitfadenState): string {
+  const prices = calcPrices(state);
+
   const headers = [
     "SessionId",
     "Timestamp",
     "Mitarbeiterin",
-    "Kundenname",
-    "Kundennummer",
-    "Telefon",
+    "Serviceartikel",
     "SolarVorhanden",
-    "SolarGroesseBekannt",
-    "SolarGroesseM2",
-    "SolarGroesseRange",
-    "KombiKommuniziert",
-    "KombiInteresse",
-    "KombiPreisModus",
-    "KombiPreisEUR",
-    "KombiPreisstufe",
-    "PVVorhanden",
-    "PVBatterie",
-    "PVHeizstab",
-    "PVUpgradeInteresse",
+    "HeizkesselTyp",
+    "Zone",
+    "Wartungsvertrag",
+    "Angebotsvariante",
+    "HeizkesselPreis",
+    "SolarEinzelpreis",
+    "SolarKombiAnteil",
+    "KombiGesamtpreis",
+    "KombiErsparnisSolar",
     "FollowUpNoetig",
     "FollowUpGrund",
     "FollowUpNotizen",
@@ -137,22 +162,17 @@ function buildCsvFromState(state: LeitfadenState): string {
     state.sessionId,
     state.timestampISO,
     state.mitarbeiterin,
-    state.kunde.name,
-    state.kunde.kundennummer,
-    state.kunde.telefon,
+    state.serviceartikel,
     state.solar.vorhanden ?? "",
-    state.solar.groesseBekannt ?? "",
-    state.solar.groesseM2 ?? "",
-    state.solar.groesseRange ?? "",
-    state.angebotKombiWartung.kommuniziert ? "ja" : "nein",
-    state.angebotKombiWartung.interesse ?? "",
-    state.angebotKombiWartung.preisModus ?? "",
-    state.angebotKombiWartung.preisEUR ?? "",
-    state.angebotKombiWartung.preisstufe ?? "",
-    state.pv.vorhanden ?? "",
-    state.pv.batterie ?? "",
-    state.pv.heizstabUeberschuss ?? "",
-    state.pv.upgradeInteresse ?? "",
+    state.heizkessel.typ ?? "",
+    state.heizkessel.zone ?? "",
+    state.heizkessel.wartungsvertrag ?? "",
+    state.angebot.variante ?? "",
+    prices.heizpreis ?? "",
+    prices.solarEinzel ?? "",
+    prices.solarKombi ?? "",
+    prices.kombiGesamt ?? "",
+    prices.ersparnisKombi ?? "",
     state.followUp.noetig ? "ja" : "nein",
     state.followUp.grund ?? "",
     state.followUp.notizen ?? "",
@@ -176,7 +196,8 @@ function downloadCSV(filename: string, csv: string) {
   URL.revokeObjectURL(url);
 }
 
-/** ===== Kleine UI-Helfer (pure Tailwind) ===== */
+/** ===== Kleine UI-Helfer (Tailwind) ===== */
+
 function YesNo({
   name,
   value,
@@ -216,8 +237,8 @@ function YesNo({
 
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
-    <section className="rounded-2xl border border-gray-200 bg-white p-5 shadow-sm">
-      <h2 className="text-lg font-semibold mb-4">{title}</h2>
+    <section className="rounded-2xl border border-gray-200 bg-white/90 p-5 shadow-sm">
+      <h2 className="text-lg font-semibold mb-3">{title}</h2>
       {children}
     </section>
   );
@@ -245,6 +266,7 @@ function SummaryRow({ label, children }: { label: string; children: React.ReactN
 }
 
 /** ===== Steps definieren ===== */
+
 type Step = {
   id: string;
   title: string;
@@ -257,13 +279,18 @@ type Step = {
 function buildSteps(state: LeitfadenState): Step[] {
   const steps: Step[] = [];
 
-  // 1) Solar vorhanden?
+  // 1) Solar vorhanden? + Gesprächstext
   steps.push({
     id: "solar-vorhanden",
-    title: "Solar-Anlage vorhanden?",
+    title: "Solar-Anlage & Gesprächseinstieg",
     render: ({ state, setState }) => (
       <Section title="Solar-Anlage">
-        <FieldRow label="Haben Sie eine Solar-Anlage?">
+        <p className="text-sm text-gray-600 mb-3">
+          <b>Formulierungsvorschlag:</b> „Haben Sie eine Solaranlage bei sich am Haus? Wir bieten eine
+          Solar-Wartung in Kombination mit der Heizkessel-Wartung zum Kombipreis an – dadurch sparen Sie beim
+          Gesamtpaket.“
+        </p>
+        <FieldRow label="Haben Sie eine Solaranlage?">
           <YesNo
             name="solar-vorhanden"
             value={state.solar.vorhanden}
@@ -274,346 +301,187 @@ function buildSteps(state: LeitfadenState): Step[] {
     ),
   });
 
-  // 1a) Größe (nur bei Ja)
-  if (state.solar.vorhanden === "ja") {
-    steps.push({
-      id: "solar-groesse",
-      title: "Solar-Größe",
-      render: ({ state, setState }) => (
-        <Section title="Solar-Anlage – Größe">
-          <FieldRow label="Ist die Größe der Anlage bekannt?">
-            <YesNo
-              name="solar-groesse-bekannt"
-              value={state.solar.groesseBekannt}
-              onChange={(v) => setState((s) => ({ ...s, solar: { ...s.solar, groesseBekannt: v } }))}
+  // 2) Heizkessel-Auswahl & Preise
+  steps.push({
+    id: "heizkessel",
+    title: "Heizkessel & Wartungspreise",
+    render: ({ state, setState }) => {
+      const prices = calcPrices(state);
+
+      return (
+        <Section title="Heizkessel – Serviceartikel & Preise">
+          <FieldRow
+            label="Serviceartikel (interne Nummer)"
+            hint="Z. B. Easyfire2, MF2/PFP oder firmeninterne Artikelnummer. Dient später zur Verknüpfung mit BC."
+          >
+            <input
+              className="w-full rounded-lg border border-gray-300 px-3 py-2"
+              placeholder="z. B. EASYFIRE2-123"
+              value={state.serviceartikel}
+              onChange={(e) => setState((s) => ({ ...s, serviceartikel: e.target.value }))}
             />
           </FieldRow>
 
-          {state.solar.groesseBekannt === "ja" && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">Größe (m²) – frei</label>
-                <input
-                  type="number"
-                  min={0}
-                  step={1}
-                  placeholder="z. B. 35"
-                  value={state.solar.groesseM2 ?? ""}
-                  onChange={(e) =>
-                    setState((s) => ({
-                      ...s,
-                      solar: { ...s.solar, groesseM2: e.target.value === "" ? null : Number(e.target.value) },
-                    }))
-                  }
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">oder Bereich wählen</label>
+          <FieldRow label="Kesseltyp">
+            <select
+              className="w-full rounded-lg border border-gray-300 px-3 py-2"
+              value={state.heizkessel.typ ?? ""}
+              onChange={(e) =>
+                setState((s) => ({
+                  ...s,
+                  heizkessel: { ...s.heizkessel, typ: (e.target.value || undefined) as HeizkesselTyp | undefined },
+                }))
+              }
+            >
+              <option value="" disabled>
+                Bitte wählen
+              </option>
+              <option value="Easyfire2">Easyfire2</option>
+              <option value="MF2/PFP">MF2/PFP</option>
+            </select>
+          </FieldRow>
+
+          <FieldRow label="Zone">
+            <select
+              className="w-full rounded-lg border border-gray-300 px-3 py-2 max-w-xs"
+              value={state.heizkessel.zone ?? ""}
+              onChange={(e) =>
+                setState((s) => ({
+                  ...s,
+                  heizkessel: { ...s.heizkessel, zone: (e.target.value || undefined) as HeizZone | undefined },
+                }))
+              }
+            >
+              <option value="" disabled>
+                Bitte wählen
+              </option>
+              <option value="1">Zone 1</option>
+              <option value="2">Zone 2</option>
+            </select>
+          </FieldRow>
+
+          <FieldRow label="Wartungsvertrag vorhanden?">
+            <YesNo
+              name="wartungsvertrag"
+              value={state.heizkessel.wartungsvertrag}
+              onChange={(v) => setState((s) => ({ ...s, heizkessel: { ...s.heizkessel, wartungsvertrag: v } }))}
+            />
+          </FieldRow>
+
+          <div className="mt-4 grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 p-4 text-sm">
+              <p className="font-semibold mb-2">Ermittelte Preise (netto)</p>
+              <SummaryRow label="Heizkessel-Wartung">
+                {prices.heizpreis !== null ? `${prices.heizpreis.toFixed(2)} €` : "Bitte Typ/Zone/Vertrag wählen"}
+              </SummaryRow>
+              <SummaryRow label="Solarwartung einzeln">{`${prices.solarEinzel.toFixed(2)} €`}</SummaryRow>
+              <SummaryRow label="Solarwartung im Kombipaket">{`${prices.solarKombi.toFixed(2)} €`}</SummaryRow>
+              <SummaryRow label="Kombi-Gesamtpreis">
+                {prices.kombiGesamt !== null ? `${prices.kombiGesamt.toFixed(2)} €` : "—"}
+              </SummaryRow>
+              <SummaryRow label="Ersparnis beim Solaranteil">
+                {prices.ersparnisKombi !== null ? `${prices.ersparnisKombi.toFixed(2)} €` : "—"}
+              </SummaryRow>
+            </div>
+
+            <div className="rounded-xl border border-amber-100 bg-amber-50/70 p-4 text-sm">
+              <p className="font-semibold mb-2">Angebotsvariante (für Dokumentation)</p>
+              <FieldRow label="Welche Variante wählt der Kunde?">
                 <select
-                  value={state.solar.groesseRange ?? ""}
+                  className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                  value={state.angebot.variante ?? ""}
                   onChange={(e) =>
                     setState((s) => ({
                       ...s,
-                      solar: { ...s.solar, groesseRange: ((e.target.value || undefined) as any) },
+                      angebot: { ...s.angebot, variante: (e.target.value || undefined) as any },
                     }))
                   }
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2"
                 >
                   <option value="" disabled>
                     Bitte wählen
                   </option>
-                  <option value="<20">Kleiner als 20 m²</option>
-                  <option value="20-40">20–40 m²</option>
-                  <option value="40-60">40–60 m²</option>
-                  <option value=">60">Größer als 60 m²</option>
+                  <option value="nur-heizkessel">Nur Heizkessel-Wartung</option>
+                  <option value="nur-solar">Nur Solarwartung</option>
+                  <option value="kombi">Kombi: Heizkessel + Solar</option>
                 </select>
-              </div>
+              </FieldRow>
+              <p className="text-xs text-gray-600 mt-2">
+                <b>Hinweis zur Formulierung:</b> „Mit der Kombi-Variante zahlen Sie für die Solarwartung statt{" "}
+                {prices.solarEinzel.toFixed(2)} € nur {prices.solarKombi.toFixed(2)} €. Das Gesamtpaket liegt dann bei{" "}
+                {prices.kombiGesamt !== null ? prices.kombiGesamt.toFixed(2) : "…"} € netto.“
+              </p>
             </div>
-          )}
+          </div>
         </Section>
-      ),
-    });
-  }
+      );
+    },
+  });
 
-  // 2) Kombi-Wartung
+  // 3) Follow-up / Rückruf
   steps.push({
-    id: "angebot-kombi",
-    title: "Angebot Kombi-Wartung",
+    id: "followup",
+    title: "Follow-up & Notizen",
     render: ({ state, setState }) => (
-      <Section title="Kombi-Wartung: Solar + Heizkessel">
-        <p className="text-sm text-gray-600 mb-2">
-          Wir bieten eine <b>Solar-Wartung</b> in Kombination mit der <b>Heizkessel-Wartung</b> zum Kombipreis an – das
-          bringt einen klaren Vorteil.
-        </p>
+      <Section title="Follow-up & interne Notizen">
+        <SummaryRow label="Solar-Anlage">
+          {state.solar.vorhanden === undefined ? "—" : state.solar.vorhanden === "ja" ? "Ja" : "Nein"}
+        </SummaryRow>
+        <SummaryRow label="Heizkessel">
+          {state.heizkessel.typ ? `${state.heizkessel.typ} (Zone ${state.heizkessel.zone ?? "?"})` : "—"}
+        </SummaryRow>
+        <SummaryRow label="Wartungsvertrag">
+          {state.heizkessel.wartungsvertrag === undefined
+            ? "—"
+            : state.heizkessel.wartungsvertrag === "ja"
+            ? "Ja"
+            : "Nein"}
+        </SummaryRow>
+        <SummaryRow label="Variante">
+          {state.angebot.variante
+            ? state.angebot.variante === "kombi"
+              ? "Kombi"
+              : state.angebot.variante === "nur-heizkessel"
+              ? "Nur Heizkessel"
+              : "Nur Solar"
+            : "—"}
+        </SummaryRow>
 
-        <FieldRow label="Interesse am Kombi-Angebot?">
-          <YesNo
-            name="kombi-interesse"
-            value={state.angebotKombiWartung.interesse}
-            onChange={(v) =>
-              setState((s) => ({ ...s, angebotKombiWartung: { ...s.angebotKombiWartung, interesse: v } }))
-            }
-          />
+        <div className="my-3 h-px bg-gray-200" />
+
+        <FieldRow label="Follow-up nötig?">
+          <label className="inline-flex items-center gap-2">
+            <input
+              type="checkbox"
+              checked={state.followUp.noetig}
+              onChange={(e) => setState((s) => ({ ...s, followUp: { ...s.followUp, noetig: e.target.checked } }))}
+            />
+            <span className="text-sm text-gray-700">{state.followUp.noetig ? "Ja" : "Nein"}</span>
+          </label>
         </FieldRow>
 
-        {state.angebotKombiWartung.interesse === "ja" && (
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mt-2">
+        {state.followUp.noetig && (
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-2">
             <div>
-              <label className="block text-sm font-medium mb-1">Preis-Modus</label>
-              <select
-                value={state.angebotKombiWartung.preisModus ?? ""}
-                onChange={(e) =>
-                  setState((s) => ({
-                    ...s,
-                    angebotKombiWartung: {
-                      ...s.angebotKombiWartung,
-                      preisModus: ((e.target.value || undefined) as any),
-                    },
-                  }))
-                }
+              <label className="block text-sm font-medium mb-1">Grund/Betreff</label>
+              <input
                 className="w-full rounded-lg border border-gray-300 px-3 py-2"
-              >
-                <option value="" disabled>
-                  Bitte wählen
-                </option>
-                <option value="fest">Fester Preis (EUR)</option>
-                <option value="auswahl">Preis-Stufe</option>
-              </select>
+                placeholder="z. B. Angebot Kombi-Wartung nachfassen"
+                value={state.followUp.grund || ""}
+                onChange={(e) => setState((s) => ({ ...s, followUp: { ...s.followUp, grund: e.target.value } }))}
+              />
             </div>
-
-            {state.angebotKombiWartung.preisModus === "fest" && (
-              <div>
-                <label className="block text-sm font-medium mb-1">Preis (EUR)</label>
-                <input
-                  type="number"
-                  min={0}
-                  step={1}
-                  placeholder="z. B. 199"
-                  value={state.angebotKombiWartung.preisEUR ?? ""}
-                  onChange={(e) =>
-                    setState((s) => ({
-                      ...s,
-                      angebotKombiWartung: {
-                        ...s.angebotKombiWartung,
-                        preisEUR: e.target.value === "" ? null : Number(e.target.value),
-                      },
-                    }))
-                  }
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2"
-                />
-              </div>
-            )}
-
-            {state.angebotKombiWartung.preisModus === "auswahl" && (
-              <div>
-                <label className="block text-sm font-medium mb-1">Preis-Stufe</label>
-                <select
-                  value={state.angebotKombiWartung.preisstufe ?? ""}
-                  onChange={(e) =>
-                    setState((s) => ({
-                      ...s,
-                      angebotKombiWartung: {
-                        ...s.angebotKombiWartung,
-                        preisstufe: ((e.target.value || undefined) as any),
-                      },
-                    }))
-                  }
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2"
-                >
-                  <option value="" disabled>
-                    Bitte wählen
-                  </option>
-                  <option value="Basis">Basis</option>
-                  <option value="Plus">Plus</option>
-                  <option value="Premium">Premium</option>
-                </select>
-              </div>
-            )}
+            <div>
+              <label className="block text-sm font-medium mb-1">Notizen</label>
+              <textarea
+                className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                rows={3}
+                placeholder="Freitext für interne Hinweise"
+                value={state.followUp.notizen || ""}
+                onChange={(e) => setState((s) => ({ ...s, followUp: { ...s.followUp, notizen: e.target.value } }))}
+              />
+            </div>
           </div>
         )}
-      </Section>
-    ),
-  });
-
-  // 3) PV vorhanden?
-  steps.push({
-    id: "pv-vorhanden",
-    title: "PV-Anlage vorhanden?",
-    render: ({ state, setState }) => (
-      <Section title="Photovoltaik (PV)">
-        <FieldRow label="Haben Sie eine PV-Anlage?">
-          <YesNo
-            name="pv-vorhanden"
-            value={state.pv.vorhanden}
-            onChange={(v) => setState((s) => ({ ...s, pv: { ...s.pv, vorhanden: v } }))}
-          />
-        </FieldRow>
-      </Section>
-    ),
-  });
-
-  // 3a) PV-Details (nur bei Ja)
-  if (state.pv.vorhanden === "ja") {
-    steps.push({
-      id: "pv-details",
-      title: "PV-Details",
-      render: ({ state, setState }) => (
-        <Section title="PV – Details">
-          <FieldRow label="Batteriespeicher vorhanden?">
-            <YesNo
-              name="pv-batterie"
-              value={state.pv.batterie}
-              onChange={(v) => setState((s) => ({ ...s, pv: { ...s.pv, batterie: v } }))}
-            />
-          </FieldRow>
-          <FieldRow label="Überschuss-Nutzung mit Heizstab?">
-            <YesNo
-              name="pv-heizstab"
-              value={state.pv.heizstabUeberschuss}
-              onChange={(v) => setState((s) => ({ ...s, pv: { ...s.pv, heizstabUeberschuss: v } }))}
-            />
-          </FieldRow>
-
-          {(state.pv.batterie === "nein" || state.pv.heizstabUeberschuss === "nein") && (
-            <FieldRow
-              label="Interesse an Nachrüstung/Optimierung?"
-              hint="Bei Interesse: Rückruf durch Beratungsteam veranlassen."
-            >
-              <YesNo
-                name="pv-upgrade"
-                value={state.pv.upgradeInteresse}
-                onChange={(v) =>
-                  setState((s) => ({
-                    ...s,
-                    pv: { ...s.pv, upgradeInteresse: v },
-                    followUp: {
-                      ...s.followUp,
-                      noetig: v === "ja" ? true : s.followUp.noetig,
-                      grund: v === "ja" ? "Beratung Speicher/Optimierung PV" : s.followUp.grund,
-                    },
-                  }))
-                }
-              />
-            </FieldRow>
-          )}
-        </Section>
-      ),
-    });
-  }
-
-  // 4) Zusammenfassung
-  steps.push({
-    id: "summary",
-    title: "Zusammenfassung",
-    render: ({ state, setState }) => (
-      <Section title="Zusammenfassung & Nächste Schritte">
-        <div className="space-y-2">
-          <SummaryRow label="Solar-Anlage">
-            {state.solar.vorhanden === undefined ? "—" : state.solar.vorhanden === "ja" ? "Ja" : "Nein"}
-          </SummaryRow>
-
-          {state.solar.vorhanden === "ja" && (
-            <SummaryRow label="Solar-Größe">
-              {state.solar.groesseBekannt === "ja"
-                ? state.solar.groesseM2
-                  ? `${state.solar.groesseM2} m²`
-                  : state.solar.groesseRange || "(bekannt, aber nicht angegeben)"
-                : state.solar.groesseBekannt === "nein"
-                ? "Unbekannt"
-                : "—"}
-            </SummaryRow>
-          )}
-
-          <SummaryRow label="Kombi-Wartung Interesse">
-            {state.angebotKombiWartung.interesse === undefined
-              ? "—"
-              : state.angebotKombiWartung.interesse === "ja"
-              ? "Ja"
-              : "Nein"}
-          </SummaryRow>
-
-          {state.angebotKombiWartung.interesse === "ja" && (
-            <SummaryRow label="Kombi-Wartung Preis">
-              {state.angebotKombiWartung.preisModus === "fest"
-                ? state.angebotKombiWartung.preisEUR
-                  ? `${state.angebotKombiWartung.preisEUR} €`
-                  : "(Preis offen)"
-                : state.angebotKombiWartung.preisModus === "auswahl"
-                ? state.angebotKombiWartung.preisstufe || "(Stufe offen)"
-                : "(nicht gewählt)"}
-            </SummaryRow>
-          )}
-
-          <SummaryRow label="PV-Anlage">
-            {state.pv.vorhanden === undefined ? "—" : state.pv.vorhanden === "ja" ? "Ja" : "Nein"}
-          </SummaryRow>
-
-          {state.pv.vorhanden === "ja" && (
-            <>
-              <SummaryRow label="Batteriespeicher">
-                {state.pv.batterie === undefined ? "—" : state.pv.batterie === "ja" ? "Ja" : "Nein"}
-              </SummaryRow>
-              <SummaryRow label="Heizstab-Nutzung">
-                {state.pv.heizstabUeberschuss === undefined
-                  ? "—"
-                  : state.pv.heizstabUeberschuss === "ja"
-                  ? "Ja"
-                  : "Nein"}
-              </SummaryRow>
-              {(state.pv.batterie === "nein" || state.pv.heizstabUeberschuss === "nein") && (
-                <SummaryRow label="Interesse Nachrüstung/Optimierung">
-                  {state.pv.upgradeInteresse === undefined
-                    ? "—"
-                    : state.pv.upgradeInteresse === "ja"
-                    ? "Ja (Rückruf einleiten)"
-                    : "Nein"}
-                </SummaryRow>
-              )}
-            </>
-          )}
-
-          <div className="my-3 h-px bg-gray-200" />
-
-          <FieldRow label="Follow-up nötig?">
-            <label className="inline-flex items-center gap-2">
-              <input
-                type="checkbox"
-                checked={state.followUp.noetig}
-                onChange={(e) => setState((s) => ({ ...s, followUp: { ...s.followUp, noetig: e.target.checked } }))}
-              />
-              <span className="text-sm text-gray-700">{state.followUp.noetig ? "Ja" : "Nein"}</span>
-            </label>
-          </FieldRow>
-
-          {state.followUp.noetig && (
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">Grund/Betreff</label>
-                <input
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2"
-                  placeholder="z. B. Beratung Speicher"
-                  value={state.followUp.grund || ""}
-                  onChange={(e) => setState((s) => ({ ...s, followUp: { ...s.followUp, grund: e.target.value } }))}
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Notizen</label>
-                <textarea
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2"
-                  placeholder="Freitext für interne Hinweise"
-                  rows={3}
-                  value={state.followUp.notizen || ""}
-                  onChange={(e) => setState((s) => ({ ...s, followUp: { ...s.followUp, notizen: e.target.value } }))}
-                />
-              </div>
-            </div>
-          )}
-        </div>
-
-        <div className="mt-6 inline-flex items-center gap-2 rounded-xl bg-green-50 p-3 text-green-800">
-          <span className="text-sm">Daten sind bereit für Export.</span>
-        </div>
       </Section>
     ),
   });
@@ -622,10 +490,10 @@ function buildSteps(state: LeitfadenState): Step[] {
 }
 
 /** ===== Hauptkomponente ===== */
+
 export default function KundendienstLeitfaden() {
   const [state, setState] = useState<LeitfadenState>(() => loadFromLocalStorage() ?? { ...EMPTY_STATE });
   const [stepIndex, setStepIndex] = useState(0);
-  const [copied, setCopied] = useState(false);
 
   const steps = useMemo(() => buildSteps(state), [state]);
   const progress = steps.length > 0 ? Math.round(((stepIndex + 1) / steps.length) * 100) : 0;
@@ -655,46 +523,43 @@ export default function KundendienstLeitfaden() {
     setStepIndex((i) => Math.max(i - 1, 0));
   }
 
-  async function handleCopyJSON() {
-    const ok = await copyToClipboard(JSON.stringify(state, null, 2));
-    setCopied(ok);
-    setTimeout(() => setCopied(false), 1500);
-  }
-
-  function handleDownloadJSON() {
-    downloadJSON(`leitfaden_${state.sessionId}.json`, state);
-  }
-
   function handleDownloadCSV() {
     const csv = buildCsvFromState(state);
     downloadCSV(`leitfaden_${state.sessionId}.csv`, csv);
   }
 
   return (
-    <div className="mx-auto max-w-3xl p-4 md:p-8">
-      <div className="rounded-2xl border bg-white shadow">
+    <div className="mx-auto max-w-4xl px-4">
+      <div className="rounded-3xl border bg-white/95 shadow-xl backdrop-blur">
         {/* Header */}
-        <div className="border-b px-5 py-4 flex items-center justify-between">
+        <div className="border-b px-5 py-4 flex items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl font-semibold">Leitfaden Kundendienst – Bestandskunde</h1>
             <p className="text-xs text-gray-500">
-              Geführter Klickablauf mit Datenerfassung (Speicherung lokal, Export/Copy als JSON/CSV).
+              Geführter Klickablauf mit Datenerfassung (Speicherung lokal, Export als CSV).
             </p>
           </div>
-          <span className="text-xs rounded-lg bg-gray-100 px-2 py-1">Session: {state.sessionId.slice(0, 8)}</span>
+          <span className="text-xs rounded-lg bg-emerald-50 px-2 py-1 border border-emerald-100">
+            Session: {state.sessionId.slice(0, 8)}
+          </span>
         </div>
 
-        <div className="p-5">
+        <div className="p-5 space-y-6">
           {/* Progress */}
-          <div className="mb-4 flex items-center gap-3">
-            <div className="h-2 w-full rounded bg-gray-200">
-              <div className="h-2 rounded bg-blue-600" style={{ width: `${progress}%` }} />
+          <div>
+            <div className="mb-2 flex items-center justify-between">
+              <span className="text-xs font-medium uppercase tracking-wide text-gray-500">
+                Schritt {stepIndex + 1} / {steps.length}
+              </span>
+              <span className="text-xs text-gray-500">{progress}%</span>
             </div>
-            <span className="text-sm text-gray-600">{progress}%</span>
+            <div className="h-2 w-full rounded-full bg-gray-200 overflow-hidden">
+              <div className="h-2 rounded-full bg-emerald-500 transition-all" style={{ width: `${progress}%` }} />
+            </div>
           </div>
 
           {/* Kopfbereich */}
-          <div className="rounded-xl border p-4 mb-6">
+          <div className="rounded-2xl border bg-slate-50/80 p-4">
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="block text-sm font-medium mb-1">Mitarbeiterin</label>
@@ -706,48 +571,26 @@ export default function KundendienstLeitfaden() {
                 />
               </div>
               <div>
-                <label className="block text-sm font-medium mb-1">Kundenname</label>
+                <label className="block text-sm font-medium mb-1">Serviceartikel</label>
                 <input
                   className="w-full rounded-lg border border-gray-300 px-3 py-2"
-                  placeholder="Max Mustermann"
-                  value={state.kunde.name}
-                  onChange={(e) => setState((s) => ({ ...s, kunde: { ...s.kunde, name: e.target.value } }))}
+                  placeholder="z. B. EASYFIRE2-Z2"
+                  value={state.serviceartikel}
+                  onChange={(e) => setState((s) => ({ ...s, serviceartikel: e.target.value }))}
                 />
               </div>
-              <div>
-                <label className="block text-sm font-medium mb-1">Kundennummer</label>
-                <input
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2"
-                  placeholder="z. B. 4711"
-                  value={state.kunde.kundennummer || ""}
-                  onChange={(e) => setState((s) => ({ ...s, kunde: { ...s.kunde, kundennummer: e.target.value } }))}
+              <div className="flex items-center justify-center">
+                {/* Platz für kleines Logo-Bild – du lädst /public/images/kwb-logo.png hoch */}
+                <img
+                  src="/images/kwb-logo.png"
+                  alt="KWB Logo"
+                  className="h-10 object-contain opacity-80"
+                  onError={(e) => {
+                    // Wenn das Bild noch nicht existiert, einfach verstecken
+                    (e.currentTarget as HTMLImageElement).style.display = "none";
+                  }}
                 />
               </div>
-            </div>
-
-            <div className="mt-3 grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div>
-                <label className="block text-sm font-medium mb-1">Telefon</label>
-                <input
-                  className="w-full rounded-lg border border-gray-300 px-3 py-2"
-                  placeholder="z. B. +43 ..."
-                  value={state.kunde.telefon}
-                  onChange={(e) => setState((s) => ({ ...s, kunde: { ...s.kunde, telefon: e.target.value } }))}
-                />
-              </div>
-              <label className="flex items-center gap-2 mt-6 cursor-pointer select-none">
-                <input
-                  type="checkbox"
-                  checked={state.angebotKombiWartung.kommuniziert}
-                  onChange={(e) =>
-                    setState((s) => ({
-                      ...s,
-                      angebotKombiWartung: { ...s.angebotKombiWartung, kommuniziert: e.target.checked },
-                    }))
-                  }
-                />
-                <span className="text-sm">Angebot Kombi-Wartung erwähnt</span>
-              </label>
             </div>
           </div>
 
@@ -755,82 +598,67 @@ export default function KundendienstLeitfaden() {
           <div key={stepIndex}>{steps[stepIndex]?.render({ state, setState })}</div>
 
           {/* Step Buttons */}
-          <div className="mt-6 flex justify-between">
+          <div className="mt-2 flex justify-between">
             <button
               onClick={prev}
               disabled={stepIndex === 0}
-              className="inline-flex items-center gap-2 rounded-lg border px-4 py-2 disabled:opacity-50"
+              className="inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm disabled:opacity-40"
             >
               Zurück
             </button>
             {stepIndex < steps.length - 1 ? (
               <button
                 onClick={next}
-                className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-4 py-2 text-white"
+                className="inline-flex items-center gap-2 rounded-lg bg-emerald-600 px-4 py-2 text-sm text-white shadow hover:bg-emerald-700"
               >
                 Weiter
               </button>
             ) : (
-              <button disabled className="inline-flex items-center gap-2 rounded-lg bg-gray-300 px-4 py-2 text-white">
+              <button
+                disabled
+                className="inline-flex items-center gap-2 rounded-lg bg-gray-300 px-4 py-2 text-sm text-white"
+              >
                 Fertig
               </button>
             )}
           </div>
 
           {/* Aktionen */}
-          <div className="my-6 h-px bg-gray-200" />
+          <div className="my-4 h-px bg-gray-200" />
           <div className="flex flex-wrap items-center gap-3">
             <button
-              onClick={async () => {
-                await handleCopyJSON();
-              }}
-              className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 ${
-                copied ? "bg-green-50 border-green-300 text-green-800" : ""
-              }`}
+              onClick={handleDownloadCSV}
+              className="inline-flex items-center gap-2 rounded-lg border px-4 py-2 text-sm"
             >
-              {copied ? "Kopiert!" : "JSON in Zwischenablage"}
-            </button>
-
-            <button onClick={handleDownloadJSON} className="inline-flex items-center gap-2 rounded-lg border px-4 py-2">
-              JSON herunterladen
-            </button>
-
-            <button onClick={handleDownloadCSV} className="inline-flex items-center gap-2 rounded-lg border px-4 py-2">
               CSV herunterladen
             </button>
 
             <button
               onClick={resetSession}
-              className="inline-flex items-center gap-2 rounded-lg px-4 py-2 hover:bg-gray-100"
+              className="inline-flex items-center gap-2 rounded-lg px-4 py-2 text-sm hover:bg-gray-100"
             >
               Neue Session
             </button>
           </div>
 
-          {/* Leitfaden-Hilfetext */}
-          <div className="mt-8 rounded-2xl border bg-gray-50 p-4">
-            <p className="text-sm font-medium mb-2">Gesprächsleitfaden (Formulierungshilfe)</p>
+          {/* Gesprächsleitfaden-Hilfetext bleibt als Überblick */}
+          <div className="mt-4 rounded-2xl border bg-gray-50 p-4">
+            <p className="text-sm font-medium mb-2">Gesprächsleitfaden (Formulierungen)</p>
             <ul className="list-disc ml-5 space-y-1 text-sm text-gray-600">
               <li>
-                <b>Solar-Anlage:</b> „Haben Sie eine Solar-Anlage bei sich am Haus?“
+                <b>Solar-Anlage:</b> „Haben Sie eine Solaranlage bei sich am Haus?“
               </li>
               <li>
-                <b>Größe:</b> „Wissen Sie, wie groß die Anlage ist (in m²)?“
+                <b>Kombi-Vorteil:</b> „Wir bieten eine Solar-Wartung in Kombination mit der Heizkessel-Wartung zum
+                Kombipreis an – so sparen Sie beim Gesamtpaket.“
               </li>
               <li>
-                <b>Kombi-Wartung:</b> „Wir bieten eine Solar-Wartung in Kombination mit der Heizkessel-Wartung zum
-                Kombipreis an. Hätten Sie Interesse?“
+                <b>Preis-Argument:</b> „Statt {SOLAR_EINZELPREIS.toFixed(2)} € für die Solarwartung einzeln zahlen Sie im
+                Kombipaket nur {SOLAR_KOMBIANTEIL.toFixed(2)} € zusätzlich.“
               </li>
               <li>
-                <b>PV:</b> „Haben Sie zusätzlich eine PV-Anlage?“
-              </li>
-              <li>
-                <b>Batterie/Heizstab:</b> „Nutzen Sie einen Batteriespeicher oder verwenden Sie den Überschuss mit einem
-                Heizstab?“
-              </li>
-              <li>
-                <b>Optimierung:</b> „Wenn kein Speicher da ist: Möchten Sie den Eigenbedarf optimal ausnutzen oder einen
-                Speicher nachrüsten? Dann meldet sich ein Kollege.“
+                <b>Abschlussfrage:</b> „Sollen wir das gleich als Kombi-Wartung vormerken oder lieber nur die
+                Kessel-Wartung durchführen?“
               </li>
             </ul>
           </div>
