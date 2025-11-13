@@ -922,14 +922,14 @@ export default function KundendienstLeitfaden() {
               </div>
               <div className="flex items-center justify-center">
                 {/* Logo-Platzhalter – Bild in /public/images/kwb-logo.png */}
-                <img
-                  src="/images/kwb-logo.png"
-                  alt="KWB Logo"
-                  className="h-10 object-contain opacity-80"
-                  onError={(e) => {
-                    (e.currentTarget as HTMLImageElement).style.display = "none";
-                  }}
-                />
+               <img
+  src="/kwb-logo.png.png"
+  alt="KWB Logo"
+  className="h-10 object-contain opacity-80"
+  onError={(e) => {
+    (e.currentTarget as HTMLImageElement).style.display = "none";
+  }}
+/>
               </div>
             </div>
           </div>
