@@ -657,6 +657,10 @@ export default function KundendienstLeitfaden() {
   function handleDownloadJSON() {
     downloadJSON(`leitfaden_${state.sessionId}.json`, state);
   }
+function handleDownloadCSV() {
+  const csv = buildCsvFromState(state);
+  downloadCSV(`leitfaden_${state.sessionId}.csv`, csv);
+}
 
   return (
     <div className="mx-auto max-w-3xl p-4 md:p-8">
