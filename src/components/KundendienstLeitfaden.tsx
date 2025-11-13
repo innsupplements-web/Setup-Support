@@ -170,7 +170,6 @@ function downloadCSV(filename: string, csv: string) {
   a.remove();
   URL.revokeObjectURL(url);
  }
-}
 
 /** ===== Kleine UI-Helfer (pure Tailwind) ===== */
 function YesNo({
