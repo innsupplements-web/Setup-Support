@@ -7,7 +7,7 @@ export default function Page() {
       <div
         className="pointer-events-none absolute inset-0 -z-10 opacity-25"
         style={{
-          backgroundImage: 'url("/images/kwb-bg.jpg")',
+          backgroundImage: 'url("/kwb-bg.jpg.webp")',
           backgroundSize: "cover",
           backgroundPosition: "center",
         }}
