@@ -772,25 +772,40 @@ function handleDownloadCSV() {
           </div>
 
           {/* Aktionen */}
-          <div className="my-6 h-px bg-gray-200" />
-          <div className="flex flex-wrap items-center gap-3">
-            <button
-              onClick={async () => {
-                await handleCopyJSON();
-              }}
-              className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 ${
-                copied ? "bg-green-50 border-green-300 text-green-800" : ""
-              }`}
-            >
-              {copied ? "Kopiert!" : "JSON in Zwischenablage"}
-            </button>
-            <button onClick={handleDownloadJSON} className="inline-flex items-center gap-2 rounded-lg border px-4 py-2">
-              JSON herunterladen
-            </button>
-            <button onClick={resetSession} className="inline-flex items-center gap-2 rounded-lg px-4 py-2 hover:bg-gray-100">
-              Neue Session
-            </button>
-          </div>
+         <div className="my-6 h-px bg-gray-200" />
+<div className="flex flex-wrap items-center gap-3">
+  <button
+    onClick={async () => {
+      await handleCopyJSON();
+    }}
+    className={`inline-flex items-center gap-2 rounded-lg border px-4 py-2 ${
+      copied ? "bg-green-50 border-green-300 text-green-800" : ""
+    }`}
+  >
+    {copied ? "Kopiert!" : "JSON in Zwischenablage"}
+  </button>
+
+  <button
+    onClick={handleDownloadJSON}
+    className="inline-flex items-center gap-2 rounded-lg border px-4 py-2"
+  >
+    JSON herunterladen
+  </button>
+
+  <button
+    onClick={handleDownloadCSV}
+    className="inline-flex items-center gap-2 rounded-lg border px-4 py-2"
+  >
+    CSV herunterladen
+  </button>
+
+  <button
+    onClick={resetSession}
+    className="inline-flex items-center gap-2 rounded-lg px-4 py-2 hover:bg-gray-100"
+  >
+    Neue Session
+  </button>
+</div>
 
           {/* Leitfaden-Hilfetext */}
           <div className="mt-8 rounded-2xl border bg-gray-50 p-4">
