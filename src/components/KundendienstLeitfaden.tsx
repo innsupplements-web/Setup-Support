@@ -7,14 +7,26 @@ type YesNo = "ja" | "nein" | undefined;
 type HeizkesselTyp = "Easyfire2" | "MF2/PFP";
 type HeizZone = "1" | "2";
 
+type WechselrichterHersteller = "Fronius" | "Huawei" | "SolarEdge" | "Sonnenkraft" | "Sonstige";
+
+type KwpBereich = "4-10" | "10-15" | "15-20" | ">20";
+
+interface PVNutzungFlags {
+  heizstab: boolean;
+  batteriespeicher: boolean;
+  waermepumpe: boolean;
+  klimaanlage: boolean;
+  sonstige: string;
+}
+
 interface LeitfadenState {
   sessionId: string;
   timestampISO: string;
   mitarbeiterin: string;
-  serviceartikel: string; // interne Nummer oder Text
+  serviceartikel: string; // interne Nummer
 
   solar: {
-    vorhanden: YesNo;
+    vorhanden: YesNo; // thermische Solar-Anlage (für Kombi-Wartung mit Kessel)
   };
 
   heizkessel: {
@@ -27,13 +39,30 @@ interface LeitfadenState {
     variante?: "nur-heizkessel" | "nur-solar" | "kombi" | undefined;
   };
 
+  pv: {
+    vorhanden: YesNo;
+    interessePV: YesNo; // Interesse an PV, falls noch keine vorhanden
+
+    wechselrichterHersteller?: WechselrichterHersteller;
+    wechselrichterSonstige?: string;
+
+    kwpBekannt: YesNo;
+    kwpBereich?: KwpBereich;
+
+    ueberschussNutzung: PVNutzungFlags;
+
+    emsVorhanden: YesNo;
+    emsInteresse: YesNo;
+    emsWuensche: PVNutzungFlags;
+  };
+
   followUp: { noetig: boolean; grund?: string; notizen?: string };
 }
 
 /** ===== Preis-Tabelle (netto) ===== */
 
 const SOLAR_EINZELPREIS = 330; // immer
-const SOLAR_KOMBIANTEIL = 169; // zusätzlicher Anteil im Kombi-Paket
+const SOLAR_KOMBIANTEIL = 169; // zusätzlicher Anteil im Kombipaket
 
 const HEIZKessel_PREISE: Record<
   HeizkesselTyp,
@@ -51,12 +80,19 @@ const HEIZKessel_PREISE: Record<
   },
   "MF2/PFP": {
     "1": { mitVertrag: 471.6, ohneVertrag: 558 },
-    // Zahlen wie von dir angegeben: Zone 2 mit 589,20 – ohne 486,00
     "2": { mitVertrag: 589.2, ohneVertrag: 486 },
   },
 };
 
 /** ===== Initialzustand ===== */
+
+const EMPTY_PV_FLAGS: PVNutzungFlags = {
+  heizstab: false,
+  batteriespeicher: false,
+  waermepumpe: false,
+  klimaanlage: false,
+  sonstige: "",
+};
 
 const EMPTY_STATE: LeitfadenState = {
   sessionId:
@@ -69,10 +105,22 @@ const EMPTY_STATE: LeitfadenState = {
   solar: { vorhanden: undefined },
   heizkessel: { wartungsvertrag: undefined },
   angebot: { variante: undefined },
+  pv: {
+    vorhanden: undefined,
+    interessePV: undefined,
+    wechselrichterHersteller: undefined,
+    wechselrichterSonstige: "",
+    kwpBekannt: undefined,
+    kwpBereich: undefined,
+    ueberschussNutzung: { ...EMPTY_PV_FLAGS },
+    emsVorhanden: undefined,
+    emsInteresse: undefined,
+    emsWuensche: { ...EMPTY_PV_FLAGS },
+  },
   followUp: { noetig: false, grund: "", notizen: "" },
 };
 
-const LS_KEY = "leitfaden-bestandskunde-v2";
+const LS_KEY = "leitfaden-bestandskunde-v3";
 
 /** ===== Helpers (SSR-sicher) ===== */
 
@@ -94,7 +142,7 @@ function loadFromLocalStorage(): LeitfadenState | null {
   }
 }
 
-/** ===== CSV-Helper ===== */
+/** ===== CSV/Preis-Helper ===== */
 
 function escapeCsvValue(value: unknown): string {
   if (value === null || value === undefined) return "";
@@ -124,7 +172,7 @@ function calcPrices(state: LeitfadenState) {
 
   const kombiGesamt = heizpreis !== null ? heizpreis + solarKombi : null;
   const ersparnisKombi =
-    heizpreis !== null ? solarEinzel - solarKombi : null; // Einsparung nur beim Solar-Anteil
+    heizpreis !== null ? solarEinzel - solarKombi : null;
 
   return {
     heizpreis,
@@ -135,6 +183,16 @@ function calcPrices(state: LeitfadenState) {
   };
 }
 
+function flagsToList(flags: PVNutzungFlags): string {
+  const list: string[] = [];
+  if (flags.heizstab) list.push("Heizstab");
+  if (flags.batteriespeicher) list.push("Batteriespeicher");
+  if (flags.waermepumpe) list.push("Wärmepumpe");
+  if (flags.klimaanlage) list.push("Klimaanlage");
+  if (flags.sonstige.trim()) list.push(`Sonstige: ${flags.sonstige.trim()}`);
+  return list.join(", ");
+}
+
 function buildCsvFromState(state: LeitfadenState): string {
   const prices = calcPrices(state);
 
@@ -143,7 +201,7 @@ function buildCsvFromState(state: LeitfadenState): string {
     "Timestamp",
     "Mitarbeiterin",
     "Serviceartikel",
-    "SolarVorhanden",
+    "SolarThermischVorhanden",
     "HeizkesselTyp",
     "Zone",
     "Wartungsvertrag",
@@ -153,6 +211,16 @@ function buildCsvFromState(state: LeitfadenState): string {
     "SolarKombiAnteil",
     "KombiGesamtpreis",
     "KombiErsparnisSolar",
+    "PV_Vorhanden",
+    "PV_Interesse",
+    "PV_WechselrichterHersteller",
+    "PV_WechselrichterSonstige",
+    "PV_kWpBekannt",
+    "PV_kWpBereich",
+    "PV_UeberschussNutzung",
+    "EMS_Vorhanden",
+    "EMS_Interesse",
+    "EMS_Wuensche",
     "FollowUpNoetig",
     "FollowUpGrund",
     "FollowUpNotizen",
@@ -173,6 +241,16 @@ function buildCsvFromState(state: LeitfadenState): string {
     prices.solarKombi ?? "",
     prices.kombiGesamt ?? "",
     prices.ersparnisKombi ?? "",
+    state.pv.vorhanden ?? "",
+    state.pv.interessePV ?? "",
+    state.pv.wechselrichterHersteller ?? "",
+    state.pv.wechselrichterSonstige ?? "",
+    state.pv.kwpBekannt ?? "",
+    state.pv.kwpBereich ?? "",
+    flagsToList(state.pv.ueberschussNutzung),
+    state.pv.emsVorhanden ?? "",
+    state.pv.emsInteresse ?? "",
+    flagsToList(state.pv.emsWuensche),
     state.followUp.noetig ? "ja" : "nein",
     state.followUp.grund ?? "",
     state.followUp.notizen ?? "",
@@ -279,18 +357,17 @@ type Step = {
 function buildSteps(state: LeitfadenState): Step[] {
   const steps: Step[] = [];
 
-  // 1) Solar vorhanden? + Gesprächstext
+  // 1) Solar thermisch vorhanden? + kurzer Text
   steps.push({
     id: "solar-vorhanden",
-    title: "Solar-Anlage & Gesprächseinstieg",
+    title: "Solar-Anlage (thermisch) & Einstieg",
     render: ({ state, setState }) => (
-      <Section title="Solar-Anlage">
+      <Section title="Solar-Anlage (für Kombi mit Heizkessel)">
         <p className="text-sm text-gray-600 mb-3">
-          <b>Formulierungsvorschlag:</b> „Haben Sie eine Solaranlage bei sich am Haus? Wir bieten eine
-          Solar-Wartung in Kombination mit der Heizkessel-Wartung zum Kombipreis an – dadurch sparen Sie beim
-          Gesamtpaket.“
+          <b>Vorschlag:</b> „Haben Sie eine Solaranlage bei sich am Haus? Wir können die Solar-Wartung gleich mit der
+          Kessel-Wartung kombinieren – das ist für Sie günstiger und alles ist in einem Termin erledigt.“
         </p>
-        <FieldRow label="Haben Sie eine Solaranlage?">
+        <FieldRow label="Haben Sie eine thermische Solaranlage?">
           <YesNo
             name="solar-vorhanden"
             value={state.solar.vorhanden}
@@ -309,19 +386,7 @@ function buildSteps(state: LeitfadenState): Step[] {
       const prices = calcPrices(state);
 
       return (
-        <Section title="Heizkessel – Serviceartikel & Preise">
-          <FieldRow
-            label="Serviceartikel (interne Nummer)"
-            hint="Z. B. Easyfire2, MF2/PFP oder firmeninterne Artikelnummer. Dient später zur Verknüpfung mit BC."
-          >
-            <input
-              className="w-full rounded-lg border border-gray-300 px-3 py-2"
-              placeholder="z. B. EASYFIRE2-123"
-              value={state.serviceartikel}
-              onChange={(e) => setState((s) => ({ ...s, serviceartikel: e.target.value }))}
-            />
-          </FieldRow>
-
+        <Section title="Heizkessel – Preise & Kombi mit Solar">
           <FieldRow label="Kesseltyp">
             <select
               className="w-full rounded-lg border border-gray-300 px-3 py-2"
@@ -372,15 +437,12 @@ function buildSteps(state: LeitfadenState): Step[] {
             <div className="rounded-xl border border-emerald-100 bg-emerald-50/70 p-4 text-sm">
               <p className="font-semibold mb-2">Ermittelte Preise (netto)</p>
               <SummaryRow label="Heizkessel-Wartung">
-                {prices.heizpreis !== null ? `${prices.heizpreis.toFixed(2)} €` : "Bitte Typ/Zone/Vertrag wählen"}
+                {prices.heizpreis !== null ? `${prices.heizpreis.toFixed(2)} €` : "Bitte Typ, Zone und Vertrag wählen"}
               </SummaryRow>
               <SummaryRow label="Solarwartung einzeln">{`${prices.solarEinzel.toFixed(2)} €`}</SummaryRow>
               <SummaryRow label="Solarwartung im Kombipaket">{`${prices.solarKombi.toFixed(2)} €`}</SummaryRow>
               <SummaryRow label="Kombi-Gesamtpreis">
                 {prices.kombiGesamt !== null ? `${prices.kombiGesamt.toFixed(2)} €` : "—"}
-              </SummaryRow>
-              <SummaryRow label="Ersparnis beim Solaranteil">
-                {prices.ersparnisKombi !== null ? `${prices.ersparnisKombi.toFixed(2)} €` : "—"}
               </SummaryRow>
             </div>
 
@@ -406,9 +468,8 @@ function buildSteps(state: LeitfadenState): Step[] {
                 </select>
               </FieldRow>
               <p className="text-xs text-gray-600 mt-2">
-                <b>Hinweis zur Formulierung:</b> „Mit der Kombi-Variante zahlen Sie für die Solarwartung statt{" "}
-                {prices.solarEinzel.toFixed(2)} € nur {prices.solarKombi.toFixed(2)} €. Das Gesamtpaket liegt dann bei{" "}
-                {prices.kombiGesamt !== null ? prices.kombiGesamt.toFixed(2) : "…"} € netto.“
+                <b>Kurz & sympathisch:</b> „Mit der Kombi-Variante zahlen Sie für die Solarwartung statt{" "}
+                {prices.solarEinzel.toFixed(2)} € nur {prices.solarKombi.toFixed(2)} € zusätzlich.“
               </p>
             </div>
           </div>
@@ -417,13 +478,292 @@ function buildSteps(state: LeitfadenState): Step[] {
     },
   });
 
-  // 3) Follow-up / Rückruf
+  // 3) PV-Anlage (ohne Preise, Fokus auf Vertrieb)
+  steps.push({
+    id: "pv",
+    title: "PV-Anlage & Energiemanagement",
+    render: ({ state, setState }) => {
+      const pv = state.pv;
+
+      const updatePVFlags = (
+        key: "ueberschussNutzung" | "emsWuensche",
+        field: keyof PVNutzungFlags,
+        value: boolean | string
+      ) => {
+        setState((s) => ({
+          ...s,
+          pv: {
+            ...s.pv,
+            [key]: {
+              ...(s.pv[key] as PVNutzungFlags),
+              [field]: value,
+            },
+          },
+        }));
+      };
+
+      return (
+        <Section title="Photovoltaik (PV)">
+          <p className="text-sm text-gray-600 mb-3">
+            <b>Vorschlag:</b> „Nutzen Sie auch eine PV-Anlage? Dann können wir gleich schauen, wie gut Sie Ihren eigenen
+            Strom schon nutzen und ob sich eine Optimierung lohnt.“
+          </p>
+
+          <FieldRow label="Haben Sie eine PV-Anlage?">
+            <YesNo
+              name="pv-vorhanden"
+              value={pv.vorhanden}
+              onChange={(v) =>
+                setState((s) => ({
+                  ...s,
+                  pv: { ...s.pv, vorhanden: v, interessePV: v === "ja" ? undefined : s.pv.interessePV },
+                }))
+              }
+            />
+          </FieldRow>
+
+          {pv.vorhanden === "nein" && (
+            <FieldRow label="Hätten Sie Interesse an einer PV-Anlage?">
+              <YesNo
+                name="pv-interesse"
+                value={pv.interessePV}
+                onChange={(v) =>
+                  setState((s) => ({
+                    ...s,
+                    pv: { ...s.pv, interessePV: v },
+                    followUp: {
+                      ...s.followUp,
+                      noetig: v === "ja" ? true : s.followUp.noetig,
+                      grund: v === "ja" ? "Interesse PV-Anlage" : s.followUp.grund,
+                    },
+                  }))
+                }
+              />
+            </FieldRow>
+          )}
+
+          {pv.vorhanden === "ja" && (
+            <>
+              <FieldRow label="Wechselrichter-Hersteller">
+                <div className="space-y-2">
+                  <select
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                    value={pv.wechselrichterHersteller ?? ""}
+                    onChange={(e) =>
+                      setState((s) => ({
+                        ...s,
+                        pv: {
+                          ...s.pv,
+                          wechselrichterHersteller: (e.target.value || undefined) as WechselrichterHersteller | undefined,
+                          wechselrichterSonstige:
+                            (e.target.value as WechselrichterHersteller) === "Sonstige"
+                              ? s.pv.wechselrichterSonstige
+                              : "",
+                        },
+                      }))
+                    }
+                  >
+                    <option value="" disabled>
+                      Bitte wählen
+                    </option>
+                    <option value="Fronius">Fronius</option>
+                    <option value="Huawei">Huawei</option>
+                    <option value="SolarEdge">SolarEdge</option>
+                    <option value="Sonnenkraft">Sonnenkraft</option>
+                    <option value="Sonstige">Sonstige</option>
+                  </select>
+                  {pv.wechselrichterHersteller === "Sonstige" && (
+                    <input
+                      className="w-full rounded-lg border border-gray-300 px-3 py-2"
+                      placeholder="Herstellername"
+                      value={pv.wechselrichterSonstige || ""}
+                      onChange={(e) =>
+                        setState((s) => ({
+                          ...s,
+                          pv: { ...s.pv, wechselrichterSonstige: e.target.value },
+                        }))
+                      }
+                    />
+                  )}
+                </div>
+              </FieldRow>
+
+              <FieldRow label="Wissen Sie die kWp-Leistung?">
+                <YesNo
+                  name="pv-kwp-bekannt"
+                  value={pv.kwpBekannt}
+                  onChange={(v) =>
+                    setState((s) => ({
+                      ...s,
+                      pv: { ...s.pv, kwpBekannt: v, kwpBereich: v === "ja" ? s.pv.kwpBereich : undefined },
+                    }))
+                  }
+                />
+              </FieldRow>
+
+              {pv.kwpBekannt === "ja" && (
+                <FieldRow label="Bereich der Anlagenleistung">
+                  <select
+                    className="w-full rounded-lg border border-gray-300 px-3 py-2 max-w-xs"
+                    value={pv.kwpBereich ?? ""}
+                    onChange={(e) =>
+                      setState((s) => ({
+                        ...s,
+                        pv: { ...s.pv, kwpBereich: (e.target.value || undefined) as KwpBereich | undefined },
+                      }))
+                    }
+                  >
+                    <option value="" disabled>
+                      Bitte wählen
+                    </option>
+                    <option value="4-10">4–10 kWp</option>
+                    <option value="10-15">10–15 kWp</option>
+                    <option value="15-20">15–20 kWp</option>
+                    <option value=">20">&gt; 20 kWp</option>
+                  </select>
+                </FieldRow>
+              )}
+
+              <FieldRow label="Wie nutzen Sie aktuell den Überschuss-Strom?">
+                <div className="space-y-1 text-sm">
+                  <label className="inline-flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={pv.ueberschussNutzung.heizstab}
+                      onChange={(e) => updatePVFlags("ueberschussNutzung", "heizstab", e.target.checked)}
+                    />
+                    <span>Heizstab</span>
+                  </label>
+                  <label className="inline-flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={pv.ueberschussNutzung.batteriespeicher}
+                      onChange={(e) => updatePVFlags("ueberschussNutzung", "batteriespeicher", e.target.checked)}
+                    />
+                    <span>Batteriespeicher</span>
+                  </label>
+                  <label className="inline-flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={pv.ueberschussNutzung.waermepumpe}
+                      onChange={(e) => updatePVFlags("ueberschussNutzung", "waermepumpe", e.target.checked)}
+                    />
+                    <span>Wärmepumpe</span>
+                  </label>
+                  <label className="inline-flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={pv.ueberschussNutzung.klimaanlage}
+                      onChange={(e) => updatePVFlags("ueberschussNutzung", "klimaanlage", e.target.checked)}
+                    />
+                    <span>Klimaanlage</span>
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <span>Sonstiges:</span>
+                    <input
+                      className="flex-1 rounded-lg border border-gray-300 px-2 py-1"
+                      placeholder="z. B. E-Auto"
+                      value={pv.ueberschussNutzung.sonstige}
+                      onChange={(e) => updatePVFlags("ueberschussNutzung", "sonstige", e.target.value)}
+                    />
+                  </div>
+                </div>
+              </FieldRow>
+
+              <FieldRow label="Haben Sie bereits ein Energiemanagement-System?">
+                <YesNo
+                  name="ems-vorhanden"
+                  value={pv.emsVorhanden}
+                  onChange={(v) =>
+                    setState((s) => ({
+                      ...s,
+                      pv: { ...s.pv, emsVorhanden: v, emsInteresse: v === "ja" ? "nein" : s.pv.emsInteresse },
+                    }))
+                  }
+                />
+              </FieldRow>
+
+              {pv.emsVorhanden !== "ja" && (
+                <FieldRow label="Hätten Sie Interesse an einem Energiemanagement-System?">
+                  <YesNo
+                    name="ems-interesse"
+                    value={pv.emsInteresse}
+                    onChange={(v) =>
+                      setState((s) => ({
+                        ...s,
+                        pv: { ...s.pv, emsInteresse: v },
+                        followUp: {
+                          ...s.followUp,
+                          noetig: v === "ja" ? true : s.followUp.noetig,
+                          grund: v === "ja" ? "Interesse Energiemanagement-System" : s.followUp.grund,
+                        },
+                      }))
+                    }
+                  />
+                </FieldRow>
+              )}
+
+              {pv.emsInteresse === "ja" && (
+                <FieldRow label="Für welche Verbraucher wäre ein Energiemanagement besonders interessant?">
+                  <div className="space-y-1 text-sm">
+                    <label className="inline-flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={pv.emsWuensche.heizstab}
+                        onChange={(e) => updatePVFlags("emsWuensche", "heizstab", e.target.checked)}
+                      />
+                      <span>Heizstab</span>
+                    </label>
+                    <label className="inline-flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={pv.emsWuensche.batteriespeicher}
+                        onChange={(e) => updatePVFlags("emsWuensche", "batteriespeicher", e.target.checked)}
+                      />
+                      <span>Batteriespeicher</span>
+                    </label>
+                    <label className="inline-flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={pv.emsWuensche.waermepumpe}
+                        onChange={(e) => updatePVFlags("emsWuensche", "waermepumpe", e.target.checked)}
+                      />
+                      <span>Wärmepumpe</span>
+                    </label>
+                    <label className="inline-flex items-center gap-2">
+                      <input
+                        type="checkbox"
+                        checked={pv.emsWuensche.klimaanlage}
+                        onChange={(e) => updatePVFlags("emsWuensche", "klimaanlage", e.target.checked)}
+                      />
+                      <span>Klimaanlage</span>
+                    </label>
+                    <div className="flex items-center gap-2">
+                      <span>Sonstiges:</span>
+                      <input
+                        className="flex-1 rounded-lg border border-gray-300 px-2 py-1"
+                        placeholder="z. B. E-Auto, Poolpumpe"
+                        value={pv.emsWuensche.sonstige}
+                        onChange={(e) => updatePVFlags("emsWuensche", "sonstige", e.target.value)}
+                      />
+                    </div>
+                  </div>
+                </FieldRow>
+              )}
+            </>
+          )}
+        </Section>
+      );
+    },
+  });
+
+  // 4) Follow-up / Rückruf
   steps.push({
     id: "followup",
     title: "Follow-up & Notizen",
     render: ({ state, setState }) => (
       <Section title="Follow-up & interne Notizen">
-        <SummaryRow label="Solar-Anlage">
+        <SummaryRow label="Solar (thermisch)">
           {state.solar.vorhanden === undefined ? "—" : state.solar.vorhanden === "ja" ? "Ja" : "Nein"}
         </SummaryRow>
         <SummaryRow label="Heizkessel">
@@ -436,14 +776,15 @@ function buildSteps(state: LeitfadenState): Step[] {
             ? "Ja"
             : "Nein"}
         </SummaryRow>
-        <SummaryRow label="Variante">
-          {state.angebot.variante
-            ? state.angebot.variante === "kombi"
-              ? "Kombi"
-              : state.angebot.variante === "nur-heizkessel"
-              ? "Nur Heizkessel"
-              : "Nur Solar"
-            : "—"}
+        <SummaryRow label="PV-Anlage">
+          {state.pv.vorhanden === undefined ? "—" : state.pv.vorhanden === "ja" ? "Ja" : "Nein"}
+        </SummaryRow>
+        <SummaryRow label="EMS-Interesse">
+          {state.pv.emsInteresse === undefined
+            ? "—"
+            : state.pv.emsInteresse === "ja"
+            ? "Ja"
+            : "Nein"}
         </SummaryRow>
 
         <div className="my-3 h-px bg-gray-200" />
@@ -465,7 +806,7 @@ function buildSteps(state: LeitfadenState): Step[] {
               <label className="block text-sm font-medium mb-1">Grund/Betreff</label>
               <input
                 className="w-full rounded-lg border border-gray-300 px-3 py-2"
-                placeholder="z. B. Angebot Kombi-Wartung nachfassen"
+                placeholder="z. B. Angebot Kombi-Wartung / PV / EMS nachfassen"
                 value={state.followUp.grund || ""}
                 onChange={(e) => setState((s) => ({ ...s, followUp: { ...s.followUp, grund: e.target.value } }))}
               />
@@ -580,13 +921,12 @@ export default function KundendienstLeitfaden() {
                 />
               </div>
               <div className="flex items-center justify-center">
-                {/* Platz für kleines Logo-Bild – du lädst /public/images/kwb-logo.png hoch */}
+                {/* Logo-Platzhalter – Bild in /public/images/kwb-logo.png */}
                 <img
                   src="/images/kwb-logo.png"
                   alt="KWB Logo"
                   className="h-10 object-contain opacity-80"
                   onError={(e) => {
-                    // Wenn das Bild noch nicht existiert, einfach verstecken
                     (e.currentTarget as HTMLImageElement).style.display = "none";
                   }}
                 />
@@ -639,28 +979,6 @@ export default function KundendienstLeitfaden() {
             >
               Neue Session
             </button>
-          </div>
-
-          {/* Gesprächsleitfaden-Hilfetext bleibt als Überblick */}
-          <div className="mt-4 rounded-2xl border bg-gray-50 p-4">
-            <p className="text-sm font-medium mb-2">Gesprächsleitfaden (Formulierungen)</p>
-            <ul className="list-disc ml-5 space-y-1 text-sm text-gray-600">
-              <li>
-                <b>Solar-Anlage:</b> „Haben Sie eine Solaranlage bei sich am Haus?“
-              </li>
-              <li>
-                <b>Kombi-Vorteil:</b> „Wir bieten eine Solar-Wartung in Kombination mit der Heizkessel-Wartung zum
-                Kombipreis an – so sparen Sie beim Gesamtpaket.“
-              </li>
-              <li>
-                <b>Preis-Argument:</b> „Statt {SOLAR_EINZELPREIS.toFixed(2)} € für die Solarwartung einzeln zahlen Sie im
-                Kombipaket nur {SOLAR_KOMBIANTEIL.toFixed(2)} € zusätzlich.“
-              </li>
-              <li>
-                <b>Abschlussfrage:</b> „Sollen wir das gleich als Kombi-Wartung vormerken oder lieber nur die
-                Kessel-Wartung durchführen?“
-              </li>
-            </ul>
           </div>
         </div>
       </div>
