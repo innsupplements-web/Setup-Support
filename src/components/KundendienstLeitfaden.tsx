@@ -91,8 +91,9 @@ async function copyToClipboard(text: string) {
     return true;
   } catch {
     return false;
-  }
-  function escapeCsvValue(value: unknown): string {
+  }  
+}  
+ function escapeCsvValue(value: unknown): string {
   if (value === null || value === undefined) return "";
   const str = String(value);
   // Ggf. Semikolon oder Anführungszeichen maskieren
@@ -101,7 +102,6 @@ async function copyToClipboard(text: string) {
   }
   return str;
 }
-
 function buildCsvFromState(state: LeitfadenState): string {
   const headers = [
     "SessionId",
@@ -169,7 +169,7 @@ function downloadCSV(filename: string, csv: string) {
   a.click();
   a.remove();
   URL.revokeObjectURL(url);
-}
+ }
 }
 
 /** ===== Kleine UI-Helfer (pure Tailwind) ===== */
