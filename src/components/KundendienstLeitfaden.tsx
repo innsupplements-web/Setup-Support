@@ -92,6 +92,84 @@ async function copyToClipboard(text: string) {
   } catch {
     return false;
   }
+  function escapeCsvValue(value: unknown): string {
+  if (value === null || value === undefined) return "";
+  const str = String(value);
+  // Ggf. Semikolon oder Anführungszeichen maskieren
+  if (str.includes(";") || str.includes('"') || str.includes("\n")) {
+    return `"${str.replace(/"/g, '""')}"`;
+  }
+  return str;
+}
+
+function buildCsvFromState(state: LeitfadenState): string {
+  const headers = [
+    "SessionId",
+    "Timestamp",
+    "Mitarbeiterin",
+    "Kundenname",
+    "Kundennummer",
+    "Telefon",
+    "SolarVorhanden",
+    "SolarGroesseBekannt",
+    "SolarGroesseM2",
+    "SolarGroesseRange",
+    "KombiKommuniziert",
+    "KombiInteresse",
+    "KombiPreisModus",
+    "KombiPreisEUR",
+    "KombiPreisstufe",
+    "PVVorhanden",
+    "PVBatterie",
+    "PVHeizstab",
+    "PVUpgradeInteresse",
+    "FollowUpNoetig",
+    "FollowUpGrund",
+    "FollowUpNotizen",
+  ];
+
+  const values = [
+    state.sessionId,
+    state.timestampISO,
+    state.mitarbeiterin,
+    state.kunde.name,
+    state.kunde.kundennummer,
+    state.kunde.telefon,
+    state.solar.vorhanden ?? "",
+    state.solar.groesseBekannt ?? "",
+    state.solar.groesseM2 ?? "",
+    state.solar.groesseRange ?? "",
+    state.angebotKombiWartung.kommuniziert ? "ja" : "nein",
+    state.angebotKombiWartung.interesse ?? "",
+    state.angebotKombiWartung.preisModus ?? "",
+    state.angebotKombiWartung.preisEUR ?? "",
+    state.angebotKombiWartung.preisstufe ?? "",
+    state.pv.vorhanden ?? "",
+    state.pv.batterie ?? "",
+    state.pv.heizstabUeberschuss ?? "",
+    state.pv.upgradeInteresse ?? "",
+    state.followUp.noetig ? "ja" : "nein",
+    state.followUp.grund ?? "",
+    state.followUp.notizen ?? "",
+  ];
+
+  const headerRow = headers.join(";");
+  const valueRow = values.map(escapeCsvValue).join(";");
+  return `${headerRow}\n${valueRow}`;
+}
+
+function downloadCSV(filename: string, csv: string) {
+  if (typeof window === "undefined") return;
+  const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  URL.revokeObjectURL(url);
+}
 }
 
 /** ===== Kleine UI-Helfer (pure Tailwind) ===== */
